@@ -1,0 +1,17 @@
+Confusion matrix (one2one, NMS-free, conf>=0.25, IoU>=0.5)
+
+Error types per class (counted at the predicted class; 'missed' at the true class)
+       class           tp       missed           fp  wrong_class localization    duplicate
+         Car         2100          290          160            1          132          177
+  Pedestrian          201          189           13            1           10           44
+     Cyclist           93           31            9            5            4           20
+
+  tp = correct, missed = object not found, fp = box on background,
+  wrong_class = right place but wrong class, localization = right class but IoU 0.1-0.5,
+  duplicate = second box on an already-found object
+
+Recall by object height in the original image (KITTI difficulty heights)
+       class        <25px (hard 미만)     25-40px (moderate)          >=40px (easy)
+         Car         0.73 (251/345)         0.86 (558/650)       0.93 (1291/1395)
+  Pedestrian            0.10 (1/10)            0.15 (4/26)         0.55 (196/354)
+     Cyclist             0.33 (2/6)           0.74 (20/27)           0.78 (71/91)

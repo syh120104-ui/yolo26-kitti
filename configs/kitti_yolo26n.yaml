@@ -1,0 +1,65 @@
+# YOLO26-n on a KITTI subset (grayscale).  Every value can be overridden from the command line,
+# e.g.  python train.py --cfg configs/kitti_yolo26n.yaml train.epochs=50 assign.stal=false
+
+data:
+  root: datasets/kitti_yolo          # made by tools/prepare_kitti.py
+  train: train
+  val: val
+  names: [Car, Pedestrian, Cyclist]
+
+model:
+  scale: n                # n / s / m / l / x
+  in_channels: 1          # 1 = grayscale (assignment requirement), 3 = colour
+  reg_max: 1              # 1 = YOLO26 (no DFL).  16 = YOLO11/YOLOv8-style DFL head (ablation)
+  end2end: true           # dual head + NMS-free one-to-one inference (YOLOv10 / YOLO26)
+  o2o_detach: true        # one-to-one head reads detached features (YOLOv10 official implementation)
+  max_det: 300
+  botnet: false           # true = BoTNet: P5 backbone stage uses relative-position MHSA bottlenecks
+  botnet_heads: 4         # BoTNet paper uses 4 heads
+
+train:
+  imgsz: [256, 832]       # [H, W], multiples of 32. KITTI ~1242x375 -> 832x251, padded to 256
+  epochs: 150
+  batch: 16
+  workers: 4
+  optimizer: MuSGD        # MuSGD / SGD / AdamW
+  lr0: 0.01               # YOLO26 paper Table S2 (Objects365 pre-training, i.e. training from scratch)
+  lrf: 0.01               # final lr = lr0 * lrf (linear decay)
+  momentum: 0.94
+  weight_decay: 0.0005
+  muon_w: 0.5             # MuSGD mixing weights (paper uses 0.44-0.53 / 0.48-0.67)
+  sgd_w: 0.5
+  warmup_epochs: 3
+  close_mosaic: 10        # turn Mosaic off for the last N epochs
+  amp: true               # mixed precision on CUDA
+  val_interval: 1
+  seed: 0
+  patience: 50            # early stop if mAP50-95 does not improve for N epochs (0 = off)
+
+loss:
+  box: 7.5                # CIoU gain
+  cls: 0.5                # BCE gain
+  l1: 6.0                 # L1 gain (reg_max=1) or DFL gain (reg_max>1; YOLOv8 used 1.5)
+  progloss: true          # Progressive Loss; false = fixed 0.5/0.5
+  o2m_init: 0.8           # one-to-many weight at epoch 0  (one-to-one = 0.2)
+  o2m_final: 0.1          # one-to-many weight at the last epoch (one-to-one = 0.9)
+
+assign:
+  topk_o2m: 10
+  topk_o2o: 7             # paper: one-to-one TAL topk=7, then topk2=1
+  topk2_o2o: 1
+  alpha: 0.5
+  beta: 6.0
+  stal: true              # Small-Target-Aware Label Assignment
+  stal_smin: 8            # GT side < s_min (px) ...
+  stal_sref: 16           # ... is replaced by s_ref (px) for the candidate test only
+
+augment:
+  mosaic: 1.0
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.5
+  fliplr: 0.5
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
