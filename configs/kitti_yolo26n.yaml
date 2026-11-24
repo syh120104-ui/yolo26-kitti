@@ -6,6 +6,7 @@ data:
   train: train
   val: val
   names: [Car, Pedestrian, Cyclist]
+  depth: false            # true = add the LiDAR depth channel (tools/prepare_lidar.py); then model.in_channels=2
 
 model:
   scale: n                # n / s / m / l / x
@@ -16,6 +17,7 @@ model:
   max_det: 300
   botnet: false           # true = BoTNet: P5 backbone stage uses relative-position MHSA bottlenecks
   botnet_heads: 4         # BoTNet paper uses 4 heads
+  p2: false               # true = extra stride-4 (P2) detection level for small objects (MST-YOLO / SOD-YOLO style)
 
 train:
   imgsz: [256, 832]       # [H, W], multiples of 32. KITTI ~1242x375 -> 832x251, padded to 256
@@ -40,6 +42,7 @@ loss:
   box: 7.5                # CIoU gain
   cls: 0.5                # BCE gain
   l1: 6.0                 # L1 gain (reg_max=1) or DFL gain (reg_max>1; YOLOv8 used 1.5)
+  nwd_ratio: 0.0          # box loss = (1-r)(1-CIoU) + r(1-NWD).  0 = YOLO26 default.  NWD run: 0.5
   progloss: true          # Progressive Loss; false = fixed 0.5/0.5
   o2m_init: 0.8           # one-to-many weight at epoch 0  (one-to-one = 0.2)
   o2m_final: 0.1          # one-to-many weight at the last epoch (one-to-one = 0.9)
@@ -53,6 +56,8 @@ assign:
   stal: true              # Small-Target-Aware Label Assignment
   stal_smin: 8            # GT side < s_min (px) ...
   stal_sref: 16           # ... is replaced by s_ref (px) for the candidate test only
+  nwd_ratio: 0.0          # TAL location term u = (1-r)CIoU + r*NWD (Wang et al. 2021).  0 = off.  NWD run: 0.5
+  nwd_C: auto             # NWD constant in px; auto = mean sqrt(w*h) of the smallest class (Pedestrian) at input size
 
 augment:
   mosaic: 1.0

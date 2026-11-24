@@ -117,6 +117,19 @@ def bbox_iou(box1, box2, CIoU: bool = False, eps: float = 1e-7):
     return iou - (rho2 / c2 + v * alpha)
 
 
+def bbox_nwd(box1, box2, C: float = 12.8, eps: float = 1e-7):
+    """Normalized Gaussian Wasserstein Distance (Wang et al., arXiv:2110.13389) between xyxy boxes.
+
+    A box (cx, cy, w, h) is the Gaussian N([cx, cy], diag(w^2/4, h^2/4)); for two such Gaussians
+    W2^2 = ||[cx, cy, w/2, h/2]_a - [cx, cy, w/2, h/2]_b||^2  and  NWD = exp(-sqrt(W2^2) / C).
+    C (pixels) ~ the average object size of the dataset. Boxes must be in pixels. Output (..., 1) in (0, 1].
+    """
+    g1 = torch.cat(((box1[..., :2] + box1[..., 2:]) / 2, (box1[..., 2:] - box1[..., :2]) / 2), -1)
+    g2 = torch.cat(((box2[..., :2] + box2[..., 2:]) / 2, (box2[..., 2:] - box2[..., :2]) / 2), -1)
+    w2 = (g1 - g2).pow(2).sum(-1, keepdim=True)
+    return torch.exp(-(w2 + eps).sqrt() / C)
+
+
 def box_iou_matrix(box1, box2, eps: float = 1e-7):
     """Pairwise IoU (N, M) between xyxy boxes."""
     (a1, a2), (b1, b2) = box1.unsqueeze(1).chunk(2, 2), box2.unsqueeze(0).chunk(2, 2)

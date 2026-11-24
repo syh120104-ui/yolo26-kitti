@@ -36,6 +36,8 @@ from yolo26.utils import box_iou_matrix, select_device  # noqa: E402
 
 C_GT, C_TP, C_FP, C_CLS, C_MISS, C_LOC = (0, 200, 0), (255, 140, 0), (40, 40, 230), (200, 60, 200), (0, 165, 255), (0, 220, 255)
 HEIGHT_BINS = [(0, 25, "<25px (hard 미만)"), (25, 40, "25-40px (moderate)"), (40, 1e9, ">=40px (easy)")]
+# box width at the *network input* vs the detection grid: <8 px = under one stride-8 (P3) cell
+WIDTH_BINS = [(0, 8, "<8px (P3 1칸 미만)"), (8, 16, "8-16px (1-2칸)"), (16, 1e9, ">=16px")]
 
 
 def confusion_update(cm, pred, gt, nc, iou_thr=0.5):
@@ -159,7 +161,8 @@ def main():
     imgsz = tuple(cfg["train"]["imgsz"])
     branch = "one2many" if (args.nms or not cfg["model"]["end2end"]) else "one2one"
     root = args.data_root or cfg["data"]["root"]
-    ds = YOLODataset(root, cfg["data"].get(args.split, args.split), imgsz, cfg["model"]["in_channels"], augment=False)
+    ds = YOLODataset(root, cfg["data"].get(args.split, args.split), imgsz, cfg["model"]["in_channels"], augment=False,
+                     depth=cfg["data"].get("depth", False))
     loader = build_loader(ds, args.batch, 0, shuffle=False)
     out = Path(args.weights).resolve().parent.parent / ("analysis_nms" if branch == "one2many" else "analysis")
     (out / "errors").mkdir(parents=True, exist_ok=True)
@@ -168,6 +171,8 @@ def main():
     err = defaultdict(lambda: defaultdict(int))  # err[class][type]
     h_tot = np.zeros((nc, len(HEIGHT_BINS)))
     h_hit = np.zeros((nc, len(HEIGHT_BINS)))
+    w_tot = np.zeros((nc, len(WIDTH_BINS)))
+    w_hit = np.zeros((nc, len(WIDTH_BINS)))
     per_image = []
 
     for imgs, targets, paths in loader:
@@ -193,6 +198,10 @@ def main():
                 b = next(k for k, (lo, hi, _) in enumerate(HEIGHT_BINS) if lo <= h < hi)
                 h_tot[c, b] += 1
                 h_hit[c, b] += hit
+                wi = float(gt[g, 3] - gt[g, 1])  # width at network input (pixels)
+                b = next(k for k, (lo, hi, _) in enumerate(WIDTH_BINS) if lo <= wi < hi)
+                w_tot[c, b] += 1
+                w_hit[c, b] += hit
             n_err = sum(t != "tp" for t in p_type) + sum(not h for h in g_hit)
             per_image.append((n_err, path, pred, gt, p_type, g_hit, (r, left, top)))
 
@@ -214,6 +223,12 @@ def main():
     for c in range(nc):
         cells = [f"{h_hit[c, b] / h_tot[c, b]:.2f} ({int(h_hit[c, b])}/{int(h_tot[c, b])})" if h_tot[c, b] else "-"
                  for b in range(len(HEIGHT_BINS))]
+        lines.append(f"{names[c]:>12} " + " ".join(f"{s:>22}" for s in cells))
+    lines += ["", f"Recall by box width at the network input ({imgsz[1]}x{imgsz[0]}) — NWD / P2 target the first two columns",
+              f"{'class':>12} " + " ".join(f"{lab:>22}" for _, _, lab in WIDTH_BINS)]
+    for c in range(nc):
+        cells = [f"{w_hit[c, b] / w_tot[c, b]:.2f} ({int(w_hit[c, b])}/{int(w_tot[c, b])})" if w_tot[c, b] else "-"
+                 for b in range(len(WIDTH_BINS))]
         lines.append(f"{names[c]:>12} " + " ".join(f"{s:>22}" for s in cells))
     text = "\n".join(lines)
     (out / "error_summary.txt").write_text(text, encoding="utf-8")

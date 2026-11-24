@@ -1,8 +1,9 @@
 """YOLO26 detection loss.
 
-Per branch:  L = box_gain * CIoU-loss + cls_gain * BCE + l1_gain * (L1 on ltrb distances  | DFL if reg_max > 1)
+Per branch:  L = box_gain * box-loss + cls_gain * BCE + l1_gain * (L1 on ltrb distances  | DFL if reg_max > 1)
 End-to-end:  L_total = a(t) * L_one2many + (1 - a(t)) * L_one2one          (Progressive Loss, paper Eq. 2)
              a(t) = max(1 - t / max(E - 1, 1), 0) * (a_init - a_final) + a_final   (Eq. 3, a: 0.8 -> 0.1)
+box-loss:    (1 - r) * (1 - CIoU) + r * (1 - NWD)     r = loss.nwd_ratio (0 = YOLO26 default, CIoU only)
 """
 
 import torch
@@ -10,7 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .assigner import TaskAlignedAssigner
-from .utils import bbox2dist, bbox_iou
+from .utils import bbox2dist, bbox_iou, bbox_nwd
 
 
 def progloss_alpha(epoch, epochs, a_init=0.8, a_final=0.1):
@@ -18,8 +19,9 @@ def progloss_alpha(epoch, epochs, a_init=0.8, a_final=0.1):
 
 
 class BranchLoss(nn.Module):
-    def __init__(self, head, assigner, box=7.5, cls=0.5, l1=6.0):
+    def __init__(self, head, assigner, box=7.5, cls=0.5, l1=6.0, nwd_ratio=0.0, nwd_C=12.8):
         super().__init__()
+        self.nwd_ratio, self.nwd_C = float(nwd_ratio), float(nwd_C)
         self.head, self.assigner = head, assigner
         self.nc, self.reg_max = head.nc, head.reg_max
         self.gain_box, self.gain_cls, self.gain_l1 = box, cls, l1
@@ -44,7 +46,12 @@ class BranchLoss(nn.Module):
             target_bboxes = target_bboxes / stride_tensor  # -> grid units
             weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
             iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], CIoU=True)
-            loss_box = ((1.0 - iou) * weight).sum() / tss
+            l_box = 1.0 - iou
+            if self.nwd_ratio > 0:  # NWD needs pixels (C is in pixels); boxes here are in grid units
+                st = stride_tensor.expand(pred_bboxes.shape[0], -1, -1)[fg_mask]
+                nwd = bbox_nwd(pred_bboxes[fg_mask] * st, target_bboxes[fg_mask] * st, self.nwd_C)
+                l_box = (1 - self.nwd_ratio) * l_box + self.nwd_ratio * (1.0 - nwd)
+            loss_box = (l_box * weight).sum() / tss
 
             if self.reg_max > 1:  # DFL (YOLOv8/11 ablation path)
                 target_ltrb = bbox2dist(anchor_points, target_bboxes, self.reg_max - 1)
@@ -74,12 +81,16 @@ class YOLO26Loss(nn.Module):
         self.head = head
         self.end2end = head.end2end
         a = cfg_assign
-        gains = dict(box=cfg_loss["box"], cls=cfg_loss["cls"], l1=cfg_loss["l1"])
+        C = a.get("nwd_C", 12.8)
+        C = float(C) if isinstance(C, (int, float)) else 12.8  # "auto" is resolved in train.py when NWD is on
+        gains = dict(box=cfg_loss["box"], cls=cfg_loss["cls"], l1=cfg_loss["l1"],
+                     nwd_ratio=cfg_loss.get("nwd_ratio", 0.0), nwd_C=C)
+        nwd = dict(nwd_ratio=a.get("nwd_ratio", 0.0), nwd_C=C)
         self.o2m = BranchLoss(head, TaskAlignedAssigner(head.nc, a["topk_o2m"], None, a["alpha"], a["beta"],
-                                                        a["stal"], a["stal_smin"], a["stal_sref"]), **gains)
+                                                        a["stal"], a["stal_smin"], a["stal_sref"], **nwd), **gains)
         if self.end2end:
             self.o2o = BranchLoss(head, TaskAlignedAssigner(head.nc, a["topk_o2o"], a["topk2_o2o"], a["alpha"], a["beta"],
-                                                            a["stal"], a["stal_smin"], a["stal_sref"]), **gains)
+                                                            a["stal"], a["stal_smin"], a["stal_sref"], **nwd), **gains)
         self.progloss = cfg_loss.get("progloss", True)
         self.a_init, self.a_final = cfg_loss.get("o2m_init", 0.8), cfg_loss.get("o2m_final", 0.1)
         self.alpha = self.a_init if self.progloss else 0.5

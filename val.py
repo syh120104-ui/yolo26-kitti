@@ -73,7 +73,8 @@ def main():
     model, cfg = load_checkpoint(args.weights, device)
     root = args.data_root or cfg["data"]["root"]
     ds = YOLODataset(root, cfg["data"][args.split] if args.split in cfg["data"] else args.split,
-                     cfg["train"]["imgsz"], cfg["model"]["in_channels"], augment=False)
+                     cfg["train"]["imgsz"], cfg["model"]["in_channels"], augment=False,
+                     depth=cfg["data"].get("depth", False))
     loader = build_loader(ds, args.batch, 0, shuffle=False)
     branch = "one2many" if (args.nms or not cfg["model"]["end2end"]) else "one2one"
     res = evaluate(model, loader, len(cfg["data"]["names"]), device, branch, args.conf, args.iou)

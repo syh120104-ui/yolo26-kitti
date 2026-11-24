@@ -28,7 +28,8 @@ def main():
         model, cfg = load_checkpoint(Path(run) / "weights" / "best.pt", device)
         names = cfg["data"]["names"]
         imgsz, in_ch = tuple(cfg["train"]["imgsz"]), cfg["model"]["in_channels"]
-        ds = YOLODataset(args.data_root or cfg["data"]["root"], cfg["data"]["val"], imgsz, in_ch, augment=False)
+        ds = YOLODataset(args.data_root or cfg["data"]["root"], cfg["data"]["val"], imgsz, in_ch, augment=False,
+                         depth=cfg["data"].get("depth", False))
         loader = build_loader(ds, 16, 0, shuffle=False)
         n_p, gflops = model_info(model, imgsz, in_ch)
         branches = ["one2one", "one2many"] if cfg["model"]["end2end"] else ["one2many"]

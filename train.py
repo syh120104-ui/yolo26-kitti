@@ -58,18 +58,31 @@ def main():
     assert imgsz[0] % 32 == 0 and imgsz[1] % 32 == 0, "imgsz must be multiples of 32"
 
     # ---------------- data
+    use_depth = C_data.get("depth", False)
     train_ds = YOLODataset(C_data["root"], C_data["train"], imgsz, C_model["in_channels"], augment=True,
-                           hyp=cfg["augment"])
-    val_ds = YOLODataset(C_data["root"], C_data["val"], imgsz, C_model["in_channels"], augment=False)
+                           hyp=cfg["augment"], depth=use_depth)
+    val_ds = YOLODataset(C_data["root"], C_data["val"], imgsz, C_model["in_channels"], augment=False, depth=use_depth)
     train_loader = build_loader(train_ds, C_train["batch"], C_train["workers"], shuffle=True)
     val_loader = build_loader(val_ds, C_train["batch"] * 2, C_train["workers"], shuffle=False)
-    print(f"train {len(train_ds)} images, val {len(val_ds)} images, classes {names}")
+    print(f"train {len(train_ds)} images, val {len(val_ds)} images, classes {names}"
+          + (" + LiDAR depth channel" if use_depth else ""))
+    A = cfg["assign"]
+    if A.get("nwd_ratio", 0) > 0 or cfg["loss"].get("nwd_ratio", 0) > 0:
+        if str(A.get("nwd_C", "auto")).lower() == "auto":
+            # NWD paper: C = average object size of the dataset (AI-TOD is all tiny objects). KITTI is dominated by
+            # large cars, so we take the average size of the smallest class (Pedestrian) — the objects we target.
+            per = train_ds.mean_box_size(per_class=True)
+            print("mean box size at input (px): " + ", ".join(f"{names[c]} {v:.1f}" for c, v in per.items()))
+            A["nwd_C"] = round(min(per.values()), 2) if per else 12.8
+            if resume_ckpt is None:
+                dump_config(cfg, save_dir / "config.yaml")
+        print(f"NWD on: assign ratio {A.get('nwd_ratio', 0)}, loss ratio {cfg['loss'].get('nwd_ratio', 0)}, C = {A['nwd_C']} px")
 
     # ---------------- model
     model = build_model(cfg).to(device)
     model.head.bias_init(imgsz)
     n_p, gflops = model_info(model, imgsz, C_model["in_channels"])
-    print(f"YOLO26{C_model['scale']}{' + BoTNet' if C_model.get('botnet') else ''}: {n_p / 1e6:.2f}M params (training, both heads)"
+    print(f"YOLO26{C_model['scale']}{' + BoTNet' if C_model.get('botnet') else ''}{' + P2 head' if C_model.get('p2') else ''}: {n_p / 1e6:.2f}M params (training, both heads)"
           + (f", {gflops:.1f} GFLOPs @ {imgsz[0]}x{imgsz[1]}" if gflops else ""))
     model.train()
     criterion = YOLO26Loss(model, cfg["loss"], cfg["assign"])

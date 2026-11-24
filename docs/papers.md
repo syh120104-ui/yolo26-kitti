@@ -30,3 +30,14 @@ v1부터의 전체 발전 과정은 별도 문서(YOLOv1 → YOLO26 발전 과�
 3. **ProgLoss 스케줄 비교**: (0.8→0.1) vs (1.0→0.1) vs 고정 — 논문 Table 5 재현
 4. **Area Attention(v12)으로 C2PSA 교체**: attention 종류에 따른 차이
 5. **이전 MiniYOLO + FPN + D-IoU 실험과 비교**: v1식 grid 회귀 → YOLO26까지 성능이 얼마나 벌어지는지
+
+
+## 작은 물체 검출 (보행자 개선 실험)
+
+| 논문 | 핵심 | 이 저장소에서 |
+| --- | --- | --- |
+| Wang et al., *A Normalized Gaussian Wasserstein Distance for Tiny Object Detection*, arXiv 2110.13389 · [code](https://github.com/jwwangchn/NWD) | 박스를 2D 가우시안 N([cx,cy], diag(w²/4,h²/4))로 보고 W₂² = ‖[cx,cy,w/2,h/2]ₐ − [cx,cy,w/2,h/2]ᵦ‖², NWD = exp(−√W₂²/C). 작은 물체에서 IoU가 위치 어긋남에 너무 민감한 문제를 해결. assignment·NMS·loss에 적용 | `yolo26/utils.py bbox_nwd`, `assigner.py _metrics`, `loss.py BranchLoss` (`nwd_ratio`) |
+| Xu et al., *NWD-RKA*, ISPRS J. 2022, arXiv 2206.13996 | NWD + 순위 기반 정답 배정 | TAL이 이미 top-k 순위 배정이라 같은 구조 |
+| Li et al., *MST-YOLO*, Sensors 24(22):7347, 2024 | 자율주행 소형 물체: YOLOv8 neck에 P2 검출층 + SSFF·TFE + MLCA | `model.p2=true` (P2 검출층만 적용) |
+| Wang & Zhao, *SOD-YOLO*, arXiv 2507.12727 | YOLOv8 + ASF 융합 + P2 + Soft-NMS (VisDrone) | 같은 P2 구조 |
+| Chen et al., *SDD-YOLO*, arXiv 2603.25218 | P2 head + YOLO26의 DFL-free·NMS-free 구조 | YOLO26 + P2 결합 참고 |

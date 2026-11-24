@@ -5,20 +5,25 @@ STAL: for the *candidate* test only, a GT side d < s_min is replaced by s_ref (c
       so tiny boxes still contain at least one stride-8 anchor centre.  Scoring, the final
       assignment and the regression target all use the original box.  (YOLO26 paper, Eq. 5:
       s_min = 8 = smallest stride, s_ref = 16 = next stride.)
+NWD (optional, nwd_ratio > 0): the location term becomes  u = (1 - r) * CIoU + r * NWD
+      (Wang et al., arXiv:2110.13389). CIoU collapses for boxes a few pixels wide when the prediction is
+      1-2 px off, and u^6 then removes them from the top-k; NWD decays smoothly and does not depend on box size.
 """
 
 import torch
 import torch.nn as nn
 
-from .utils import bbox_iou
+from .utils import bbox_iou, bbox_nwd
 
 
 class TaskAlignedAssigner(nn.Module):
-    def __init__(self, nc, topk=10, topk2=None, alpha=0.5, beta=6.0, stal=True, s_min=8.0, s_ref=16.0, eps=1e-9):
+    def __init__(self, nc, topk=10, topk2=None, alpha=0.5, beta=6.0, stal=True, s_min=8.0, s_ref=16.0,
+                 nwd_ratio=0.0, nwd_C=12.8, eps=1e-9):
         super().__init__()
         self.nc, self.topk, self.topk2 = nc, topk, topk2
         self.alpha, self.beta = alpha, beta
         self.stal, self.s_min, self.s_ref = stal, s_min, s_ref
+        self.nwd_ratio, self.nwd_C = float(nwd_ratio), float(nwd_C)
         self.eps = eps
 
     @torch.no_grad()
@@ -103,7 +108,10 @@ class TaskAlignedAssigner(nn.Module):
 
         pd = pd_bboxes.unsqueeze(1).expand(-1, n_max, -1, -1)[mask]
         gt = gt_bboxes.unsqueeze(2).expand(-1, -1, n_anchors, -1)[mask]
-        overlaps[mask] = bbox_iou(gt, pd, CIoU=True).squeeze(-1).clamp_(0)
+        u = bbox_iou(gt, pd, CIoU=True).squeeze(-1).clamp_(0)
+        if self.nwd_ratio > 0:  # boxes are in input pixels here
+            u = (1 - self.nwd_ratio) * u + self.nwd_ratio * bbox_nwd(gt, pd, self.nwd_C).squeeze(-1)
+        overlaps[mask] = u
 
         align_metric = bbox_scores.pow(self.alpha) * overlaps.pow(self.beta)
         return align_metric, overlaps

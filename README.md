@@ -82,6 +82,20 @@ YOLO는 이미지를 한 번만 보고 물체의 위치와 종류를 동시에 �
 
 이번 실험에서는 시간 제약으로 1, 2번을 하지 못했다. 이 두 가지를 먼저 해야 BoTNet 효과를 확실하게 판단할 수 있다.
 
+## 진행 중: 작은 보행자 개선 (NWD · P2 head)
+
+오답 분석에서 놓친 보행자는 원본에서는 40px 이상이 많지만, 832×256으로 줄인 입력에서는 **폭이 7~11px**로 검출 격자(stride 8) 한 칸 정도다.
+이 크기에서는 YOLO26이 정답 칸을 고를 때 쓰는 CIoU 점수가 1~2px 어긋남에도 크게 떨어진다. 그래서 두 가지를 따로 실험한다.
+
+| 실험 | 바꾸는 것 | 켜는 법 | 연산량 |
+| --- | --- | --- | --- |
+| B. NWD | 정답 고르기(TAL)와 box loss에서 CIoU의 절반을 **NWD**(박스를 가우시안으로 보고 거리를 잰 값)로 바꿈 | `assign.nwd_ratio=0.5 loss.nwd_ratio=0.5` | 2.88 GFLOPs (그대로) |
+| C. P2 head | stride 4 검출층을 추가해 격자를 2배 촘촘하게 | `model.p2=true` | 4.06 GFLOPs |
+
+- NWD 상수 C는 학습 데이터에서 가장 작은 클래스(보행자)의 평균 크기로 자동 설정된다 (`assign.nwd_C: auto`).
+- 오답 분석(`tools/analyze_errors.py`)에 **입력 해상도 기준 박스 폭별 recall** 표(<8px / 8–16px / ≥16px)를 추가했다. 두 방법은 앞의 두 칸을 올리는 것이 목표다.
+- 참고 논문: NWD (arXiv 2110.13389), MST-YOLO (Sensors 2024), SOD-YOLO (arXiv 2507.12727), SDD-YOLO (arXiv 2603.25218). 정리는 [`docs/papers.md`](docs/papers.md).
+
 ## 실행 방법 (Colab)
 
 1. 이 저장소를 zip으로 받아 Google 드라이브 `내 드라이브`에 `yolo26-kitti.zip`이라는 이름으로 올린다.

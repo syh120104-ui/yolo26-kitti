@@ -46,15 +46,16 @@ class Detect26(nn.Module):
     end2end    -> an extra one-to-one copy of both branches (YOLOv10 / YOLO26). Inference uses it, no NMS.
     """
 
-    def __init__(self, nc, ch, strides, reg_max=1, end2end=True, o2o_detach=True, max_det=300):
+    def __init__(self, nc, ch, strides, reg_max=1, end2end=True, o2o_detach=True, max_det=300, ref_ch=None):
         super().__init__()
         self.nc, self.nl, self.reg_max = nc, len(ch), reg_max
         self.no = nc + 4 * reg_max
         self.end2end, self.o2o_detach, self.max_det = end2end, o2o_detach, max_det
         self.register_buffer("stride", torch.tensor(strides, dtype=torch.float))
 
-        c2 = max(16, ch[0] // 4, reg_max * 4)
-        c3 = max(ch[0], min(nc, 100))
+        ref = ref_ch or ch[0]  # with a P2 head, keep the branch widths the P3-first model had
+        c2 = max(16, ref // 4, reg_max * 4)
+        c3 = max(ref, min(nc, 100))
         self.cv2 = nn.ModuleList(
             nn.Sequential(Conv(x, c2, 3), Conv(c2, c2, 3), nn.Conv2d(c2, 4 * reg_max, 1)) for x in ch
         )
@@ -143,14 +144,14 @@ class Detect26(nn.Module):
 
 class YOLO26(nn.Module):
     def __init__(self, nc=3, in_ch=1, scale="n", reg_max=1, end2end=True, o2o_detach=True, max_det=300,
-                 botnet=False, botnet_heads=4, imgsz=(256, 832)):
+                 botnet=False, botnet_heads=4, imgsz=(256, 832), p2=False):
         super().__init__()
         depth, width, max_ch = SCALES[scale]
         c = lambda x: make_divisible(min(x, max_ch) * width, 8)  # noqa: E731
         d = lambda n: max(round(n * depth), 1) if n > 1 else n  # noqa: E731
         big = scale in "mlx"  # YOLO11/26 rule: C3k inner blocks everywhere for m/l/x
         self.yaml = dict(nc=nc, in_ch=in_ch, scale=scale, reg_max=reg_max, end2end=end2end,
-                         o2o_detach=o2o_detach, max_det=max_det, botnet=botnet)
+                         o2o_detach=o2o_detach, max_det=max_det, botnet=botnet, p2=p2)
 
         # ---------------- backbone
         self.b0 = Conv(in_ch, c(64), 3, 2)  # P1/2
@@ -177,7 +178,15 @@ class YOLO26(nn.Module):
         self.n20 = Conv(c(512), c(512), 3, 2)
         self.n22 = C3k2(c(512) + c(1024), c(1024), d(1), c3k=True, e=0.5, attn=True)  # P5 out
 
-        self.head = Detect26(nc, (c(256), c(512), c(1024)), (8, 16, 32), reg_max, end2end, o2o_detach, max_det)
+        self.p2 = p2
+        if p2:  # extra stride-4 level (YOLOv8-p2 style): top-down P3 -> P2, then bottom-up back into P3
+            self.np2 = C3k2(c(256) + c(256), c(128), d(2), c3k=big)  # P2 out
+            self.np2_down = Conv(c(128), c(128), 3, 2)
+            self.np3 = C3k2(c(128) + c(256), c(256), d(2), c3k=big)  # P3 out (refined with P2 detail)
+            self.head = Detect26(nc, (c(128), c(256), c(512), c(1024)), (4, 8, 16, 32), reg_max, end2end, o2o_detach,
+                                 max_det, ref_ch=c(256))
+        else:
+            self.head = Detect26(nc, (c(256), c(512), c(1024)), (8, 16, 32), reg_max, end2end, o2o_detach, max_det)
         self._init_weights()
 
     def _init_weights(self):
@@ -187,16 +196,19 @@ class YOLO26(nn.Module):
         self.head.bias_init()
 
     def forward(self, x):
-        x = self.b2(self.b1(self.b0(x)))
-        p3 = self.b4(self.b3(x))
+        p2 = self.b2(self.b1(self.b0(x)))
+        p3 = self.b4(self.b3(p2))
         p4 = self.b6(self.b5(p3))
         p5 = self.b10(self.b9(self.b8(self.b7(p4))))
 
         n13 = self.n13(torch.cat((self.up(p5), p4), 1))
         n16 = self.n16(torch.cat((self.up(n13), p3), 1))
+        if self.p2:
+            o2 = self.np2(torch.cat((self.up(n16), p2), 1))
+            n16 = self.np3(torch.cat((self.np2_down(o2), n16), 1))
         n19 = self.n19(torch.cat((self.n17(n16), n13), 1))
         n22 = self.n22(torch.cat((self.n20(n19), p5), 1))
-        return self.head([n16, n19, n22])
+        return self.head([o2, n16, n19, n22] if self.p2 else [n16, n19, n22])
 
 
 def build_model(cfg):
@@ -204,7 +216,7 @@ def build_model(cfg):
     m = cfg["model"]
     return YOLO26(len(cfg["data"]["names"]), m["in_channels"], m["scale"], m["reg_max"], m["end2end"],
                   m["o2o_detach"], m["max_det"], m.get("botnet", False), m.get("botnet_heads", 4),
-                  tuple(cfg["train"]["imgsz"]))
+                  tuple(cfg["train"]["imgsz"]), m.get("p2", False))
 
 
 def model_info(model: nn.Module, imgsz=(256, 832), in_ch=1):

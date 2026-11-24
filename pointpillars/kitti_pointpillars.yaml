@@ -1,0 +1,37 @@
+# PointPillars on KITTI LiDAR (3D detection, separate from the 2D YOLO26 experiments)
+# Override any value: python -m pointpillars.train --cfg pointpillars/kitti_pointpillars.yaml train.epochs=40
+
+data_root: datasets/kitti3d          # made by tools/prepare_kitti3d.py
+classes: [Car, Pedestrian, Cyclist]
+
+# point cloud range [x_min, y_min, z_min, x_max, y_max, z_max] in metres (LiDAR frame: x forward, y left, z up)
+pc_range: [0.0, -39.68, -3.0, 69.12, 39.68, 1.0]
+voxel_size: [0.16, 0.16, 4.0]        # pillar size 0.16 m (paper); one pillar spans the whole height
+max_points: 32                       # points kept per pillar (paper: 100; 32 is the common OpenPCDet setting)
+max_pillars_train: 16000
+max_pillars_test: 40000
+
+# one anchor size per class, two rotations (0, 90 deg); z = anchor centre height
+anchors:
+  Car:        {size: [3.9, 1.6, 1.56], z: -1.0, match: 0.60, unmatch: 0.45}
+  Pedestrian: {size: [0.8, 0.6, 1.73], z: -0.6, match: 0.50, unmatch: 0.35}
+  Cyclist:    {size: [1.76, 0.6, 1.73], z: -0.6, match: 0.50, unmatch: 0.35}
+anchor_rotations: [0.0, 1.5708]
+dir_offset: 0.78539                  # direction classifier boundary (45 deg)
+
+loss: {loc: 2.0, cls: 1.0, dir: 0.2}  # paper: beta_loc = 2, beta_cls = 1, beta_dir = 0.2
+
+augment:
+  flip: 0.5                          # mirror y -> -y
+  rotation: [-0.785, 0.785]          # global rotation (rad)
+  scale: [0.95, 1.05]                # global scaling
+
+train:
+  epochs: 80
+  batch: 4
+  workers: 4
+  lr: 0.003                          # AdamW + one-cycle (OpenPCDet KITTI setting); paper: Adam 2e-4, 160 epochs
+  weight_decay: 0.01
+  amp: true
+  val_interval: 10
+  seed: 0
